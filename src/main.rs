@@ -1,6 +1,7 @@
 use termios::*;
 use std::os::fd::AsRawFd;
 use std::io;
+use std::io::{Read,Write};
 use std::thread;
 use std::process::ExitCode;
 use std::sync::{Arc,Mutex};
@@ -11,7 +12,6 @@ pub struct ThreadedIO {
 	input_buffer: Mutex<RefCell<Vec<char>>>,
 	current_prompt_state: Mutex<RefCell<String>>,
 	old_term_settings: Termios,
-	stdin: io::Stdin,
 }
 impl ThreadedIO {
 	fn new() -> ThreadedIO{
@@ -20,23 +20,71 @@ impl ThreadedIO {
 			input_buffer: Mutex::new(RefCell::new(vec![])),
 			current_prompt_state: Mutex::new(RefCell::new("".to_string())),
 			old_term_settings: Termios::from_fd(io::stdin().as_raw_fd()).unwrap(),
-			stdin: io::stdin(),
 		};
 		//====== setup raw stdin ======
 		let mut term = instance.old_term_settings.clone();
-		term.c_lflag &= !(ICANON | ECHO);
-		term.c_cc[VMIN] = 0;
-		term.c_cc[VTIME] = 0;
+		term.c_lflag &= !(ICANON | ECHO); //unbuffered no echo
+		term.c_cc[VMIN] = 1; //get at least one byte before read returns
+		term.c_cc[VTIME] = 0; //dont wait for bytes
 		tcsetattr(io::stdin().as_raw_fd(),TCSANOW,&term).unwrap();
 		//return
 		instance
 	}
-	fn println(&self,string: String){
+	fn println(&self,string: String) -> Result<(),std::io::Error>{
 		let _io_guard = self.io_lock.lock();
-		println!("{}",string);
+		let current_prompt_state_binding = self.current_prompt_state.lock().unwrap();
+		let current_prompt_state = current_prompt_state_binding.borrow();
+		let mut stdout = io::stdout();
+		//delete old prompt and insert line
+		stdout.write_all(format!("\r\x1b[2K{}\n",string).as_bytes())?;
+		//redisplay the prompt
+		stdout.write_all(current_prompt_state.as_bytes())?;
+		stdout.flush()?;
+		Ok(())
 	}
-	fn input(&self,prompt: &str) -> Result<String,String>{
-		Ok("".to_string())
+	fn input(&self,prompt: &str) -> Result<String,std::io::Error>{
+		let input_buffer_binding = self.input_buffer.lock().unwrap();
+		let mut input_buffer = input_buffer_binding.borrow_mut();
+		{//====== initialy display the prompt ======
+			let _io_guard = self.io_lock.lock();
+			let current_prompt_state_binding = self.current_prompt_state.lock().unwrap();
+			let mut current_prompt_state = current_prompt_state_binding.borrow_mut();
+			*current_prompt_state = prompt.to_string() + &input_buffer.iter().collect::<String>();
+			let mut stdout = io::stdout();
+			stdout.write_all(format!("\r\x1b[2K{}",current_prompt_state).as_bytes())?;
+			stdout.flush()?;
+		}
+		//====== get input bytes ======
+		for ch in io::stdin().bytes(){
+			match ch?{
+				10 => break,//enter
+				127 => {input_buffer.pop(); ()}, //delete
+				ch => {
+					if ch >= 32 && ch <= 126{
+						input_buffer.push(char::from(ch));
+					}else{
+						//self.println(format!("unknown char {}",ch))?;
+					}
+				},
+			}
+			//====== display the prompt closure ======
+			let _io_guard = self.io_lock.lock();
+			let current_prompt_state_binding = self.current_prompt_state.lock().unwrap();
+			let mut current_prompt_state = current_prompt_state_binding.borrow_mut();
+			*current_prompt_state = prompt.to_string() + &input_buffer.iter().collect::<String>();
+			let mut stdout = io::stdout();
+			stdout.write_all(format!("\r\x1b[2K{}",current_prompt_state).as_bytes())?;
+			stdout.flush()?;
+		}
+		{//====== clear the input buffer ======
+			let _io_guard = self.io_lock.lock();
+			let current_prompt_state_binding = self.current_prompt_state.lock().unwrap();
+			let mut current_prompt_state = current_prompt_state_binding.borrow_mut();
+			*current_prompt_state = "".to_string();
+		}
+		let message = input_buffer.iter().collect();
+		input_buffer.truncate(0);
+		Ok(message)
 	}
 	fn reset_term(&self){
 		tcsetattr(io::stdin().as_raw_fd(),TCSANOW,&self.old_term_settings).unwrap();
@@ -60,7 +108,11 @@ fn main() -> ExitCode{
 		match thread::spawn(move ||{
 			loop {
 				let message = io.input(">>>").unwrap();
-				io.println(format!("you typed: [{}]",message));
+				match io.println(format!("you typed: [{}]",message)){
+					Err(e) => println!("error {:?}",e),
+					Ok(_) => (),
+				};
+				if message == "/exit" {break;}
 			}
 		}).join() {
 			Ok(_) => ExitCode::SUCCESS,
