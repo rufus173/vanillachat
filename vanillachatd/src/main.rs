@@ -1,9 +1,9 @@
 use std::io;
+extern crate libnotify;
 use std::io::Read;
 use std::time::Duration;
 use std::thread;
 use std::sync::Mutex;
-use std::cell::RefCell;
 use std::net::{TcpListener, TcpStream, SocketAddr};
 
 pub struct Connection {
@@ -32,7 +32,7 @@ fn main() -> io::Result<()>{
 		for i in 0..connections.len(){
 			let message = recv_msg(connections.get_mut(i).unwrap());
 			if message.is_some(){
-				println!("new message: {}",message.unwrap());
+				let _ = send_notification(message.unwrap());
 			}
 		}
 		//====== verify sockets are still alive ======
@@ -103,4 +103,15 @@ fn recv_msg(connection: &mut Connection) -> Option<String>{
 	//unswitch from nonblocking
 	connection.stream.set_nonblocking(false).expect("could not place connection socket into blocking mode");
 	return_value
+}
+fn send_notification(message: String) -> Result<(),String>{
+	println!("new message: {message}");
+	libnotify::init("vanillachatd")?;
+	let notification = libnotify::Notification::new("New vanillachat message",Some(message.as_str()),None);
+	match notification.show(){
+		Ok(_) => Ok(()),
+		Err(e) => Err(e.to_string()),
+	}?;
+	libnotify::uninit();
+	Ok(())
 }

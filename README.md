@@ -6,4 +6,8 @@ It has a daemon and a client, with the daemon accepting connections, and notifyi
 
 # Install
 
+## Requirements
+
+`libnotify-dev`
+
 `sudo make install`
