@@ -32,7 +32,7 @@ fn main() -> io::Result<()>{
 		for i in 0..connections.len(){
 			let message = recv_msg(connections.get_mut(i).unwrap());
 			if message.is_some(){
-				let _ = send_notification(message.unwrap());
+				let _ = send_notification(&connections[i],message.unwrap());
 			}
 		}
 		//====== verify sockets are still alive ======
@@ -104,10 +104,10 @@ fn recv_msg(connection: &mut Connection) -> Option<String>{
 	connection.stream.set_nonblocking(false).expect("could not place connection socket into blocking mode");
 	return_value
 }
-fn send_notification(message: String) -> Result<(),String>{
+fn send_notification(connection: &Connection, message: String) -> Result<(),String>{
 	println!("new message: {message}");
 	libnotify::init("vanillachatd")?;
-	let notification = libnotify::Notification::new("New vanillachat message",Some(message.as_str()),None);
+	let notification = libnotify::Notification::new(format!("vanillachat @{}",connection.address).as_str(),Some(message.as_str()),None);
 	match notification.show(){
 		Ok(_) => Ok(()),
 		Err(e) => Err(e.to_string()),
