@@ -1,9 +1,10 @@
 use termios::*;
+use std::panic;
+use std::env;
 use std::os::fd::AsRawFd;
 use std::io;
 use std::io::{Read,Write};
 use std::thread;
-use std::process::ExitCode;
 use std::sync::{Arc,Mutex};
 use std::cell::RefCell;
 
@@ -13,6 +14,49 @@ pub struct ThreadedIO {
 	current_prompt_state: Mutex<RefCell<String>>,
 	old_term_settings: Termios,
 }
+
+pub struct Args {
+	short: Vec<String>,
+	long: Vec<String>,
+	other: Vec<String>,
+}
+
+impl Args {
+	fn gather() -> Args{
+		let mut args = Args {
+			short: vec![],
+			long: vec![],
+			other: vec![],
+		};
+		for enumeration in env::args().enumerate(){ 
+			if enumeration.0 == 0 {continue};
+			let arg = enumeration.1.clone();
+			//args stop after "--"
+			if arg == *"--"{
+				args.other.append(&mut env::args()
+					.collect::<Vec<String>>()[enumeration.0+1..]
+					.to_vec()
+				);
+				break;
+			} 
+			if arg[..2] == *"--"{
+				//long
+				args.long.push(arg[2..].to_string());
+			}else if arg[..1] == *"-" && arg.len() != 1{
+				//short
+				args.short.extend(arg[1..].to_string().chars().map(|ch| ch.to_string()));
+			}else{
+				//other
+				args.other.push(arg);
+			}
+		}
+		//println!("short: {:?}",args.short);
+		//println!("long: {:?}",args.long);
+		//println!("other: {:?}",args.other);
+		args
+	}
+}
+
 impl ThreadedIO {
 	fn new() -> ThreadedIO{
 		let instance = ThreadedIO {
@@ -95,9 +139,17 @@ impl Drop for ThreadedIO{
 		self.reset_term();
 	}
 }
-fn main() -> ExitCode{
+fn main() -> Result<(),io::Error>{
+	//====== process arguments ======
+	let args = Args::gather();
+	if args.long.contains(&"help".to_string()) || args.short.contains(&"h".to_string()){
+		print_help();
+		return Ok(());
+	}
+	//====== init sockets ======
 	let threaded_io_instance = ThreadedIO::new();
 	let io_controller = Arc::new(threaded_io_instance);
+	//let socket: TcpStream = ;
 	{//====== receiving messages thread ======
 		let io = io_controller.clone();
 		thread::spawn(move ||{
@@ -115,8 +167,20 @@ fn main() -> ExitCode{
 				if message == "/exit" {break;}
 			}
 		}).join() {
-			Ok(_) => ExitCode::SUCCESS,
-			Err(e) => {println!("{:?}",e); ExitCode::SUCCESS}
+			Ok(_) => Ok(()),
+			Err(e) => {println!("{:?}",e); panic::resume_unwind(e)}
 		}
 	}
+}
+fn send_msg() -> Result<String,io::Error>{
+	Ok("".to_string())
+}
+fn recv_msg() -> Result<String,io::Error>{
+	Ok("".to_string())
+}
+fn print_help(){
+	let name = env::args().next().unwrap();
+	println!("help:");
+	println!("{} [options] <address> [port] OR",name);
+	println!("{} [options] [port]",name);
 }
