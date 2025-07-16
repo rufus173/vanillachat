@@ -1,12 +1,14 @@
 use termios::*;
+use std::error::Error;
 use std::panic;
 use std::env;
 use std::os::fd::AsRawFd;
 use std::io;
-use std::io::{Read,Write};
+use std::io::{Read,Write,ErrorKind};
 use std::thread;
 use std::sync::{Arc,Mutex};
 use std::cell::RefCell;
+use std::net::{TcpStream,TcpListener,SocketAddr};
 
 pub struct ThreadedIO {
 	io_lock: Mutex<()>,
@@ -39,10 +41,10 @@ impl Args {
 				);
 				break;
 			} 
-			if arg[..2] == *"--"{
+			if arg.len() >= 2 && arg[..2] == *"--"{
 				//long
 				args.long.push(arg[2..].to_string());
-			}else if arg[..1] == *"-" && arg.len() != 1{
+			}else if arg.len() >= 1 && arg[..1] == *"-" && arg.len() != 1{
 				//short
 				args.short.extend(arg[1..].to_string().chars().map(|ch| ch.to_string()));
 			}else{
@@ -140,13 +142,48 @@ impl Drop for ThreadedIO{
 	}
 }
 fn main() -> Result<(),io::Error>{
+	let mut port: u16 = 9567;
+	let mut address: String = "".into();
 	//====== process arguments ======
 	let args = Args::gather();
+	let socket: TcpStream;
 	if args.long.contains(&"help".to_string()) || args.short.contains(&"h".to_string()){
 		print_help();
 		return Ok(());
 	}
-	//====== init sockets ======
+	if args.other.len() == 0{
+		println!("using daemon's connections...");
+		//get connection from socket
+		socket = match socket_from_daemon(){
+			Ok(s) => s,
+			Err(e) => return Err(e),
+		};
+
+	}else if args.other.len() > 2{
+		//too many arguments!!!!
+		eprintln!();
+		print_help();
+		return Err(io::Error::new(ErrorKind::ArgumentListTooLong,"Too many arguments."));
+	}else if args.other.len() == 1{
+		//address only
+		address = args.other[0].clone();
+		socket = match socket_from_addr(address,port){
+			Ok(s) => s,
+			Err(e) => {eprintln!("Failed to connect: {}",e);return Err(e)},
+		};
+	}else{
+		//address and port provided
+		address = args.other[0].clone();
+		port = match args.other[1].parse(){
+			Ok(p) => p,
+			Err(e) => {eprintln!("Failed to parse port."); return Err(io::Error::new(ErrorKind::Other,format!("{:?}",e)))},
+		};
+		socket = match socket_from_addr(address,port){
+			Ok(s) => s,
+			Err(e) => {eprintln!("Failed to connect: {}",e);return Err(e)},
+		};
+	}
+	//====== init threads ======
 	let threaded_io_instance = ThreadedIO::new();
 	let io_controller = Arc::new(threaded_io_instance);
 	//let socket: TcpStream = ;
@@ -182,5 +219,23 @@ fn print_help(){
 	let name = env::args().next().unwrap();
 	println!("help:");
 	println!("{} [options] <address> [port] OR",name);
-	println!("{} [options] [port]",name);
+	println!("{} [options] to connect through the daemon",name);
+}
+fn socket_from_daemon() -> io::Result<TcpStream>{
+	Err(io::Error::other("cannot process"))
+}
+fn socket_from_addr(address: String, port: u16) -> io::Result<TcpStream>{
+	println!("Converting address \"{}\" and port \"{}\"",address,port);
+	let addr_array: [u8; 4];
+	addr_array = match address.split(".")
+		.map(|x| x.parse::<u8>().unwrap_or(0))
+		.collect::<Vec<u8>>()
+		.try_into(){
+			Ok(a) => a,
+			Err(e) => return Err(io::Error::other("Could not parse address")),
+	};
+	let mut sock_addr: SocketAddr = SocketAddr::from((addr_array,port));
+	sock_addr.set_port(port);
+	println!("Attempting connection using address {}...",sock_addr);
+	TcpStream::connect(sock_addr)
 }
