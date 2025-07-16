@@ -151,37 +151,56 @@ fn main() -> Result<(),io::Error>{
 		print_help();
 		return Ok(());
 	}
-	if args.other.len() == 0{
-		println!("using daemon's connections...");
-		//get connection from socket
-		socket = match socket_from_daemon(){
+	if args.short.contains(&"s".to_string()) || args.long.contains(&"server".to_string()){
+		//------ hosting ------
+		if args.other.len() > 1{
+			//too many arguments!!!!
+			print_help();
+			return Err(io::Error::new(ErrorKind::ArgumentListTooLong,"Too many arguments."));
+		}else if args.other.len() == 1{
+			//port provided
+			port = match args.other[0].parse(){
+				Ok(p) => p,
+				Err(e) => {eprintln!("Failed to parse port."); return Err(io::Error::new(ErrorKind::Other,format!("{:?}",e)))},
+			};
+		}
+		socket = match socket_from_listen_addr("0.0.0.0".into(),port){
 			Ok(s) => s,
-			Err(e) => return Err(e),
-		};
-
-	}else if args.other.len() > 2{
-		//too many arguments!!!!
-		eprintln!();
-		print_help();
-		return Err(io::Error::new(ErrorKind::ArgumentListTooLong,"Too many arguments."));
-	}else if args.other.len() == 1{
-		//address only
-		address = args.other[0].clone();
-		socket = match socket_from_addr(address,port){
-			Ok(s) => s,
-			Err(e) => {eprintln!("Failed to connect: {}",e);return Err(e)},
+			Err(e) => {eprintln!("Failed to host: {}",e);return Err(e)},
 		};
 	}else{
-		//address and port provided
-		address = args.other[0].clone();
-		port = match args.other[1].parse(){
-			Ok(p) => p,
-			Err(e) => {eprintln!("Failed to parse port."); return Err(io::Error::new(ErrorKind::Other,format!("{:?}",e)))},
-		};
-		socket = match socket_from_addr(address,port){
-			Ok(s) => s,
-			Err(e) => {eprintln!("Failed to connect: {}",e);return Err(e)},
-		};
+		//------ connecting ------
+		if args.other.len() == 0{
+			println!("using daemon's connections...");
+			//get connection from socket
+			socket = match socket_from_daemon(){
+				Ok(s) => s,
+				Err(e) => return Err(e),
+			};
+
+		}else if args.other.len() > 2{
+			//too many arguments!!!!
+			print_help();
+			return Err(io::Error::new(ErrorKind::ArgumentListTooLong,"Too many arguments."));
+		}else if args.other.len() == 1{
+			//address only
+			address = args.other[0].clone();
+			socket = match socket_from_addr(address,port){
+				Ok(s) => s,
+				Err(e) => {eprintln!("Failed to connect: {}",e);return Err(e)},
+			};
+		}else{
+			//address and port provided
+			address = args.other[0].clone();
+			port = match args.other[1].parse(){
+				Ok(p) => p,
+				Err(e) => {eprintln!("Failed to parse port."); return Err(io::Error::new(ErrorKind::Other,format!("{:?}",e)))},
+			};
+			socket = match socket_from_addr(address,port){
+				Ok(s) => s,
+				Err(e) => {eprintln!("Failed to connect: {}",e);return Err(e)},
+			};
+		}
 	}
 	//====== init threads ======
 	let threaded_io_instance = ThreadedIO::new();
@@ -220,6 +239,8 @@ fn print_help(){
 	println!("help:");
 	println!("{} [options] <address> [port] OR",name);
 	println!("{} [options] to connect through the daemon",name);
+	println!("for hosting:");
+	println!("{} [options] <\"-s\" or \"--server\"> [port]",name);
 }
 fn socket_from_daemon() -> io::Result<TcpStream>{
 	Err(io::Error::other("cannot process"))
@@ -238,4 +259,23 @@ fn socket_from_addr(address: String, port: u16) -> io::Result<TcpStream>{
 	sock_addr.set_port(port);
 	println!("Attempting connection using address {}...",sock_addr);
 	TcpStream::connect(sock_addr)
+}
+fn socket_from_listen_addr(address: String, port: u16) -> io::Result<TcpStream>{
+	println!("Converting address \"{}\" and port \"{}\"",address,port);
+	let addr_array: [u8; 4];
+	addr_array = match address.split(".")
+		.map(|x| x.parse::<u8>().unwrap_or(0))
+		.collect::<Vec<u8>>()
+		.try_into(){
+			Ok(a) => a,
+			Err(e) => return Err(io::Error::other("Could not parse address")),
+	};
+	let mut sock_addr: SocketAddr = SocketAddr::from((addr_array,port));
+	sock_addr.set_port(port);
+	println!("Attempting to host using address {}...",sock_addr);
+	let listener = TcpListener::bind(sock_addr);
+	match listener?.accept(){
+		Ok((sock,addr)) => Ok(sock),
+		Err(e) => Err(e),
+	}
 }
