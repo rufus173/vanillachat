@@ -146,7 +146,7 @@ fn main() -> Result<(),io::Error>{
 	let mut address: String = "".into();
 	//====== process arguments ======
 	let args = Args::gather();
-	let socket: TcpStream;
+	let mut socket: TcpStream;
 	if args.long.contains(&"help".to_string()) || args.short.contains(&"h".to_string()){
 		print_help();
 		return Ok(());
@@ -202,13 +202,17 @@ fn main() -> Result<(),io::Error>{
 			};
 		}
 	}
+	println!("Connected!");
 	//====== init threads ======
 	let threaded_io_instance = ThreadedIO::new();
 	let io_controller = Arc::new(threaded_io_instance);
 	//let socket: TcpStream = ;
 	{//====== receiving messages thread ======
 		let io = io_controller.clone();
+		let mut socket = socket.try_clone()?;
 		thread::spawn(move ||{
+			let message = recv_msg(&mut socket).unwrap();
+			io.println(message);
 		});
 	}
 	{//====== input handling thread ======
@@ -216,7 +220,7 @@ fn main() -> Result<(),io::Error>{
 		match thread::spawn(move ||{
 			loop {
 				let message = io.input(">>>").unwrap();
-				match io.println(format!("you typed: [{}]",message)){
+				match send_msg(&mut socket,&message){
 					Err(e) => println!("error {:?}",e),
 					Ok(_) => (),
 				};
@@ -227,12 +231,6 @@ fn main() -> Result<(),io::Error>{
 			Err(e) => {println!("{:?}",e); panic::resume_unwind(e)}
 		}
 	}
-}
-fn send_msg() -> Result<String,io::Error>{
-	Ok("".to_string())
-}
-fn recv_msg() -> Result<String,io::Error>{
-	Ok("".to_string())
 }
 fn print_help(){
 	let name = env::args().next().unwrap();
@@ -278,4 +276,31 @@ fn socket_from_listen_addr(address: String, port: u16) -> io::Result<TcpStream>{
 		Ok((sock,addr)) => Ok(sock),
 		Err(e) => Err(e),
 	}
+}
+fn recv_msg(stream: &mut TcpStream) -> io::Result<String>{
+	//switch to nonblocking
+	//====== read ======
+	let mut message_buffer = vec![];
+	let mut buffer = [0; 1];
+	loop{
+		let count = match stream.read(&mut buffer){
+			Ok(count) => count,
+			Err(e) => break Err(e),
+		};
+		if count == 1 {
+			if buffer[0] == 0x04{
+				//end of transmition
+				break Ok(message_buffer.into_iter().collect());
+			}
+			//====== append the char to the buffer ======
+			let ch = char::from_u32(buffer[0] as u32).unwrap();
+			message_buffer.push(ch);
+		}else{
+			break Err(io::Error::from(ErrorKind::UnexpectedEof));
+		}
+	}
+}
+fn send_msg(stream: &mut TcpStream,message: &String) -> io::Result<()>{
+	stream.write_all((message.to_owned()+"\x04").as_bytes())?;
+	Ok(())
 }
