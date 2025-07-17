@@ -1,6 +1,4 @@
 use termios::*;
-use std::error::Error;
-use std::panic;
 use std::env;
 use std::os::fd::AsRawFd;
 use std::io;
@@ -143,7 +141,7 @@ impl Drop for ThreadedIO{
 }
 fn main() -> Result<(),io::Error>{
 	let mut port: u16 = 9567;
-	let mut address: String = "".into();
+	let address: String;
 	//====== process arguments ======
 	let args = Args::gather();
 	let mut socket: TcpStream;
@@ -205,32 +203,86 @@ fn main() -> Result<(),io::Error>{
 	println!("Connected!");
 	//====== init threads ======
 	let threaded_io_instance = ThreadedIO::new();
+	let receiving_thread: thread::JoinHandle<io::Result<()>>;
+	let sending_thread: thread::JoinHandle<io::Result<()>>;
 	let io_controller = Arc::new(threaded_io_instance);
+	let continue_status = Arc::new(Mutex::new(true));
 	//let socket: TcpStream = ;
 	{//====== receiving messages thread ======
+		let continue_status = continue_status.clone();
 		let io = io_controller.clone();
 		let mut socket = socket.try_clone()?;
-		thread::spawn(move ||{
-			let message = recv_msg(&mut socket).unwrap();
-			io.println(message);
+		receiving_thread = thread::spawn(move ||{
+			match loop {//====== mainloop ======
+				let message = match recv_msg(&mut socket){
+					Ok(m) => m,
+					Err(e) => {
+						io.println(format!("Connection error: {:?}",e));
+						break Err(e)
+					},
+				};
+				match io.println(message){
+					Ok(()) => io::Result::Ok(()),
+					Err(e) => break Err(e),
+				};
+				let keep_going = match continue_status.lock(){
+					Ok(t) => t,
+					Err(e) => break Err(io::Error::other(format!("{:?}",e)))
+				};
+				if *keep_going == false {break Ok(())}
+			}{//====== match result from loop ======
+				Ok(()) => Ok(()),
+				Err(e) => {
+					let mut keep_going = match continue_status.lock(){
+						Ok(t) => t,
+						Err(e) => return Err(io::Error::other(format!("{:?}",e)))
+					};
+					*keep_going = false;
+					Err(e)
+				},
+			}
 		});
 	}
 	{//====== input handling thread ======
+		let continue_status = continue_status.clone();
 		let io = io_controller.clone();
-		match thread::spawn(move ||{
-			loop {
-				let message = io.input(">>>").unwrap();
-				match send_msg(&mut socket,&message){
-					Err(e) => println!("error {:?}",e),
-					Ok(_) => (),
+		sending_thread = thread::spawn(move ||{
+			match loop {//====== mainloop ======
+				let message = match io.input(">>>"){
+					Ok(m) => m,
+					Err(e) => break Err(e),
 				};
-				if message == "/exit" {break;}
+				match send_msg(&mut socket,&message){
+					Ok(()) => (),
+					Err(e) => {
+						io.println(format!("Connection error: {:?}",e));
+						break Err(e)
+					},
+				};
+				if message == "/exit" {break Ok(());}
+				//use bool to signal when to terminate thread
+				let keep_going = match continue_status.lock(){
+					Ok(t) => t,
+					Err(e) => break Err(io::Error::other(format!("{:?}",e)))
+				};
+				if *keep_going == false {break Ok(())}
+			}{//====== match result from loop ======
+				Ok(()) => Ok(()),
+				Err(e) => {
+					let mut keep_going = match continue_status.lock(){
+						Ok(t) => t,
+						Err(e) => return Err(io::Error::other(format!("{:?}",e)))
+					};
+					*keep_going = false;
+					Err(e)
+				},
 			}
-		}).join() {
-			Ok(_) => Ok(()),
-			Err(e) => {println!("{:?}",e); panic::resume_unwind(e)}
-		}
+		});
 	}
+	//====== join all the threads ======
+	receiving_thread.join();
+	sending_thread.join();
+	Ok(())
 }
 fn print_help(){
 	let name = env::args().next().unwrap();
@@ -251,7 +303,7 @@ fn socket_from_addr(address: String, port: u16) -> io::Result<TcpStream>{
 		.collect::<Vec<u8>>()
 		.try_into(){
 			Ok(a) => a,
-			Err(e) => return Err(io::Error::other("Could not parse address")),
+			Err(e) => return Err(io::Error::other(format!("Could not parse address: {:?}",e))),
 	};
 	let mut sock_addr: SocketAddr = SocketAddr::from((addr_array,port));
 	sock_addr.set_port(port);
@@ -266,14 +318,14 @@ fn socket_from_listen_addr(address: String, port: u16) -> io::Result<TcpStream>{
 		.collect::<Vec<u8>>()
 		.try_into(){
 			Ok(a) => a,
-			Err(e) => return Err(io::Error::other("Could not parse address")),
+			Err(e) => return Err(io::Error::other(format!("Could not parse address: {:?}",e))),
 	};
 	let mut sock_addr: SocketAddr = SocketAddr::from((addr_array,port));
 	sock_addr.set_port(port);
 	println!("Attempting to host using address {}...",sock_addr);
 	let listener = TcpListener::bind(sock_addr);
 	match listener?.accept(){
-		Ok((sock,addr)) => Ok(sock),
+		Ok((sock,_addr)) => Ok(sock),
 		Err(e) => Err(e),
 	}
 }
