@@ -5,5 +5,6 @@ edition = "2024"
 
 [dependencies]
 ansi-control-codes = { version = "1.0.1", features = ["parser"] }
+chrono = "0.4.41"
 nix = { version = "0.30.1", features = ["poll"] }
 termios = "0.3.3"

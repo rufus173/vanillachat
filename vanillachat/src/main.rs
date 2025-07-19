@@ -1,4 +1,5 @@
 use termios::*;
+use chrono::{DateTime,Local};
 use std::env;
 use std::os::fd::AsRawFd;
 use std::io;
@@ -9,6 +10,7 @@ use std::cell::RefCell;
 use std::net::{TcpStream,TcpListener,SocketAddr};
 use nix::poll::{poll,PollFd,PollFlags};
 use std::os::fd::AsFd;
+use std::os::unix::net::UnixStream;
 
 pub struct ThreadedIO {
 	io_lock: Mutex<()>,
@@ -16,6 +18,12 @@ pub struct ThreadedIO {
 	current_prompt_state: Mutex<RefCell<String>>,
 	old_term_settings: Termios,
 	interupt: Mutex<bool>,
+}
+
+pub struct Connection {
+	time: DateTime<Local>,
+	stream: TcpStream,
+	name: String,
 }
 
 pub struct Args {
@@ -320,7 +328,35 @@ fn print_help(){
 	println!("{} [options] <\"-s\" or \"--server\"> [port]",name);
 }
 fn socket_from_daemon() -> io::Result<TcpStream>{
-	Err(io::Error::other("cannot process"))
+	let mut daemon = UnixStream::connect("/tmp/vanillachatd.socket")?;
+	//====== receive list of available connections ======
+	let mut count_buffer: [u8; 4];
+	daemon.read_exact(&mut count_buffer)?;
+	let connection_count = u32::from_be_bytes(count_buffer);
+	let mut connections = vec![];
+	for i in 0..connection_count{
+		let connection: Connection;
+		//read timestamp of when connection was made
+		let mut timestamp_buffer: [u8; 8];
+		daemon.read_exact(&mut timestamp_buffer)?;
+		let timestamp = u64::from_be_bytes(timestamp_buffer);
+		//if extracting the date fails, fallback to unix epoch
+		connection.time = DateTime::from_timestamp(timestamp as i64,0).unwrap_or(DateTime::UNIX_EPOCH).into();
+		//read the name they provide
+		connection.name = recv_msg(&mut daemon)?;
+		//push the connection
+		connections.push(connection);
+	}
+	//====== request socket ======
+	if connection_count == 0{
+		//no socket available
+		Err(io::Error::other("No sockets available"))
+	}else{
+		//request
+		u32::to_be_bytes(0)
+		let request_buffer: [u8; 4];
+
+	}
 }
 fn socket_from_addr(address: String, port: u16) -> io::Result<TcpStream>{
 	println!("Converting address \"{}\" and port \"{}\"",address,port);
@@ -356,7 +392,7 @@ fn socket_from_listen_addr(address: String, port: u16) -> io::Result<TcpStream>{
 		Err(e) => Err(e),
 	}
 }
-fn recv_msg(stream: &mut TcpStream) -> io::Result<String>{
+fn recv_msg<T: io::Read>(stream: &mut T) -> io::Result<String>{
 	//switch to nonblocking
 	//====== read ======
 	let mut message_buffer = vec![];
@@ -379,7 +415,7 @@ fn recv_msg(stream: &mut TcpStream) -> io::Result<String>{
 		}
 	}
 }
-fn send_msg(stream: &mut TcpStream,message: &String) -> io::Result<()>{
+fn send_msg<T: io::Write>(stream: &mut T,message: &String) -> io::Result<()>{
 	stream.write_all((message.to_owned()+"\x04").as_bytes())?;
 	Ok(())
 }

@@ -1,15 +1,16 @@
 use std::io;
+use std::time::{Duration,Instant};
 extern crate libnotify;
-use std::io::Read;
-use std::time::Duration;
+use std::io::{Write,Read};
 use std::thread;
-use std::sync::Mutex;
+use std::os::unix::net::{UnixStream, UnixListener};
 use std::net::{TcpListener, TcpStream, SocketAddr};
 
 pub struct Connection {
 	stream: TcpStream,
 	address: SocketAddr,
 	message_buffer: String,
+	name: String,
 }
 
 fn main() -> io::Result<()>{
@@ -18,6 +19,8 @@ fn main() -> io::Result<()>{
 	let port: u16 = 9567;
 	let addr = SocketAddr::from(([0,0,0,0],port));
 	let listener = TcpListener::bind(addr)?;
+	let ipc = UnixListener::bind("/tmp/vanillachatd.socket")?;
+	ipc.set_nonblocking(true)?;
 	//nonblocking
 	listener.set_nonblocking(true).expect("could not set listener to nonblocking");
 	loop{
@@ -28,9 +31,10 @@ fn main() -> io::Result<()>{
 			Err(e) => panic!("Error: {e}"),
 		};
 		//====== accept ipc connections ======
+		let _ = handle_ipc(&ipc,&mut connections);
 		//====== receive any messages ======
 		for i in 0..connections.len(){
-			let message = recv_msg(connections.get_mut(i).unwrap());
+			let message = recv_msg(connections.get_mut(i).unwrap(),None);
 			if message.is_some(){
 				let _ = send_notification(&connections[i],message.unwrap());
 			}
@@ -53,11 +57,17 @@ fn main() -> io::Result<()>{
 }
 fn handle_connection(connections: &mut Vec<Connection>, stream: TcpStream, address: SocketAddr) -> Result<(), io::Error>{
 	println!("New connection: {}",address);
-	let connection = Connection {
+	let mut connection = Connection {
 		stream: stream,
 		address: address,
 		message_buffer: "".to_string(),
+		name: String::new()
 	};
+	
+	//======= give the client 5s to send their name ======
+	let timeout = Duration::from_secs(5);
+	let name = recv_msg(&mut connection,Some(timeout)).unwrap_or("name unknown".into());
+	connection.name = name;
 	connections.push(connection);
 	Ok(())
 }
@@ -75,12 +85,20 @@ fn is_alive(connection: &Connection) -> bool{
 		Err(e) => false,
 	}
 }
-fn recv_msg(connection: &mut Connection) -> Option<String>{
+fn recv_msg(connection: &mut Connection,timeout: Option<Duration>) -> Option<String>{
 	//switch to nonblocking
 	connection.stream.set_nonblocking(true).expect("could not place connection socket into nonblocking mode");
+	//start the timer
+	let stopwatch = Instant::now();
 	//====== read ======
 	let mut buffer = [0; 1];
 	let return_value = loop{
+		//exit if timeout reached
+		if timeout.is_some(){
+			if stopwatch.elapsed() >= timeout.unwrap(){
+				break None;
+			}
+		}
 		let count = match connection.stream.read(&mut buffer){
 			Ok(count) => count,
 			Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => 0,
@@ -114,4 +132,19 @@ fn send_notification(connection: &Connection, message: String) -> Result<(),Stri
 	}?;
 	libnotify::uninit();
 	Ok(())
+}
+fn handle_ipc(listener: &UnixListener, connections: &mut Vec<Connection>) -> io::Result<()>{
+	let (mut connection,addr) = match listener.accept(){
+		Ok(c) => c,
+		//yeild if no connection ready
+		Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+		Err(e) => return Err(e),
+	};
+	//send the number of connections
+	connection.write_all(&u32::to_be_bytes(connections.len().try_into().unwrap_or(u32::MAX)))?;
+	Ok(())
+}
+fn send_msg<T: write>(connection: &mut T, message: String) -> io::Result<()>{
+	//do stuff
+
 }
