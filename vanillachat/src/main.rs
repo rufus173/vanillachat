@@ -7,12 +7,15 @@ use std::thread;
 use std::sync::{Arc,Mutex};
 use std::cell::RefCell;
 use std::net::{TcpStream,TcpListener,SocketAddr};
+use nix::poll::{poll,PollFd,PollFlags};
+use std::os::fd::AsFd;
 
 pub struct ThreadedIO {
 	io_lock: Mutex<()>,
 	input_buffer: Mutex<RefCell<Vec<char>>>,
 	current_prompt_state: Mutex<RefCell<String>>,
 	old_term_settings: Termios,
+	interupt: Mutex<bool>,
 }
 
 pub struct Args {
@@ -64,6 +67,7 @@ impl ThreadedIO {
 			input_buffer: Mutex::new(RefCell::new(vec![])),
 			current_prompt_state: Mutex::new(RefCell::new("".to_string())),
 			old_term_settings: Termios::from_fd(io::stdin().as_raw_fd()).unwrap(),
+			interupt: Mutex::new(false),
 		};
 		//====== setup raw stdin ======
 		let mut term = instance.old_term_settings.clone();
@@ -87,6 +91,10 @@ impl ThreadedIO {
 		Ok(())
 	}
 	fn input(&self,prompt: &str) -> Result<String,std::io::Error>{
+		{//reset interupt
+			*self.interupt.lock().unwrap() = false;
+		}
+
 		let input_buffer_binding = self.input_buffer.lock().unwrap();
 		let mut input_buffer = input_buffer_binding.borrow_mut();
 		{//====== initialy display the prompt ======
@@ -98,7 +106,19 @@ impl ThreadedIO {
 			stdout.write_all(format!("\r\x1b[2K{}",current_prompt_state).as_bytes())?;
 			stdout.flush()?;
 		}
+		//====== poll wrapper that allows interuption ======
+		let wait_for_stdin = move |timeout|{
+			let stdin = io::stdin();
+			let mut pollfd = [PollFd::new(stdin.as_fd(),PollFlags::POLLIN)];
+			//====== wait for data ======
+			loop {
+				if poll::<u16>(&mut pollfd,timeout)? >= 1 {break}
+				if* self.interupt.lock().expect("Mutex poisoned: fatal") == true {return Err(io::Error::from(ErrorKind::Interrupted))}
+			}
+			io::Result::<()>::Ok(())
+		};
 		//====== get input bytes ======
+		wait_for_stdin(50)?;
 		for ch in io::stdin().bytes(){
 			match ch?{
 				10 => break,//enter
@@ -119,6 +139,8 @@ impl ThreadedIO {
 			let mut stdout = io::stdout();
 			stdout.write_all(format!("\r\x1b[2K{}",current_prompt_state).as_bytes())?;
 			stdout.flush()?;
+			//====== wait for data ======
+			wait_for_stdin(50)?;
 		}
 		{//====== clear the input buffer ======
 			let _io_guard = self.io_lock.lock();
@@ -129,6 +151,10 @@ impl ThreadedIO {
 		let message = input_buffer.iter().collect();
 		input_buffer.truncate(0);
 		Ok(message)
+	}
+	fn interupt_input(&self){
+		let mut lock = self.interupt.lock().unwrap();
+		*lock = true;
 	}
 	fn reset_term(&self){
 		tcsetattr(io::stdin().as_raw_fd(),TCSANOW,&self.old_term_settings).unwrap();
@@ -217,11 +243,11 @@ fn main() -> Result<(),io::Error>{
 				let message = match recv_msg(&mut socket){
 					Ok(m) => m,
 					Err(e) => {
-						io.println(format!("Connection error: {:?}",e));
+						let _ = io.println(format!("Connection error: {:?}",e))?;
 						break Err(e)
 					},
 				};
-				match io.println(message){
+				let _ = match io.println(message){
 					Ok(()) => io::Result::Ok(()),
 					Err(e) => break Err(e),
 				};
@@ -238,6 +264,7 @@ fn main() -> Result<(),io::Error>{
 						Err(e) => return Err(io::Error::other(format!("{:?}",e)))
 					};
 					*keep_going = false;
+					io.interupt_input();
 					Err(e)
 				},
 			}
@@ -255,7 +282,7 @@ fn main() -> Result<(),io::Error>{
 				match send_msg(&mut socket,&message){
 					Ok(()) => (),
 					Err(e) => {
-						io.println(format!("Connection error: {:?}",e));
+						let _ = io.println(format!("Connection error: {:?}",e))?;
 						break Err(e)
 					},
 				};
@@ -280,8 +307,8 @@ fn main() -> Result<(),io::Error>{
 		});
 	}
 	//====== join all the threads ======
-	receiving_thread.join();
-	sending_thread.join();
+	let _ = receiving_thread.join();
+	let _ = sending_thread.join();
 	Ok(())
 }
 fn print_help(){
