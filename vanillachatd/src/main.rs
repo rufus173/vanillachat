@@ -1,9 +1,14 @@
+#![feature(unix_socket_ancillary_data)]
 use std::io;
+use std::os::fd::AsRawFd;
+use chrono::{Local,TimeZone};
+use std::path::Path;
+use std::fs;
 use std::time::{Duration,Instant};
 extern crate libnotify;
 use std::io::{Write,Read};
 use std::thread;
-use std::os::unix::net::{UnixStream, UnixListener};
+use std::os::unix::net::{UnixStream, UnixListener, SocketAncillary};
 use std::net::{TcpListener, TcpStream, SocketAddr};
 
 pub struct Connection {
@@ -13,13 +18,19 @@ pub struct Connection {
 	name: String,
 }
 
+const SOCKET_LOCATION: &str = "/tmp/vanillachatd.socket";
+
 fn main() -> io::Result<()>{
 	let mut connections: Vec<Connection> = vec![];
 	//===== setup the listener ======
 	let port: u16 = 9567;
 	let addr = SocketAddr::from(([0,0,0,0],port));
 	let listener = TcpListener::bind(addr)?;
-	let ipc = UnixListener::bind("/tmp/vanillachatd.socket")?;
+	if Path::new(SOCKET_LOCATION).exists(){
+		//delete socket if it exists
+		fs::remove_file(SOCKET_LOCATION)?;
+	}
+	let ipc = UnixListener::bind(SOCKET_LOCATION)?;
 	ipc.set_nonblocking(true)?;
 	//nonblocking
 	listener.set_nonblocking(true).expect("could not set listener to nonblocking");
@@ -82,7 +93,7 @@ fn is_alive(connection: &Connection) -> bool{
 			0 => false,
 			_ => true,
 		},
-		Err(e) => false,
+		Err(_) => false,
 	}
 }
 fn recv_msg(connection: &mut Connection,timeout: Option<Duration>) -> Option<String>{
@@ -134,17 +145,36 @@ fn send_notification(connection: &Connection, message: String) -> Result<(),Stri
 	Ok(())
 }
 fn handle_ipc(listener: &UnixListener, connections: &mut Vec<Connection>) -> io::Result<()>{
+	//====== accept connection ======
 	let (mut connection,addr) = match listener.accept(){
 		Ok(c) => c,
 		//yeild if no connection ready
 		Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(()),
 		Err(e) => return Err(e),
 	};
+	//====== send over client info ======
 	//send the number of connections
 	connection.write_all(&u32::to_be_bytes(connections.len().try_into().unwrap_or(u32::MAX)))?;
+	for i in 0..connections.len(){
+		//send timestamp
+		let timestamp: u64 = Local::now().timestamp().try_into().unwrap_or(0);
+		//send name
+		send_msg(&mut connection,connections[i].name.clone());
+	}
+	//====== let client select socket ======
+	let mut selected_buffer = [0; 4];
+	connection.read_exact(&mut selected_buffer)?;
+	let selected_connection = u32::from_be_bytes(selected_buffer);
+	//====== send the socket ======
+	let socket_fd = connections.swap_remove(selected_connection as usize).stream.as_raw_fd();
+	let mut ancillary_buffer = [0; 128];
+	let mut ancillary = SocketAncillary::new(&mut ancillary_buffer);
+	ancillary.add_fds(&[socket_fd]);
+	let data = io::IoSlice::new("Ok".as_ref());
+	connection.send_vectored_with_ancillary(&[data],&mut ancillary)?;
 	Ok(())
 }
-fn send_msg<T: write>(connection: &mut T, message: String) -> io::Result<()>{
-	//do stuff
-
+fn send_msg<T: Write>(connection: &mut T, message: String) -> io::Result<()>{
+	let bytes = (message + "\x04").into_bytes();
+	connection.write_all(&bytes)
 }

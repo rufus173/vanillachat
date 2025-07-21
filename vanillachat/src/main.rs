@@ -355,7 +355,6 @@ fn socket_from_daemon() -> io::Result<TcpStream>{
 		//request
 		u32::to_be_bytes(0)
 		let request_buffer: [u8; 4];
-
 	}
 }
 fn socket_from_addr(address: String, port: u16) -> io::Result<TcpStream>{
