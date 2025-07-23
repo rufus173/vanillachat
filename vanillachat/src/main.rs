@@ -206,7 +206,7 @@ fn main() -> Result<(),io::Error>{
 				Err(e) => {eprintln!("Failed to parse port."); return Err(io::Error::new(ErrorKind::Other,format!("{:?}",e)))},
 			};
 		}
-		connection = socket_from_listen_addr("0.0.0.0".into(),port,our_name)?
+		connection = socket_from_listen_addr("0.0.0.0".into(),port,&our_name)?
 	}else{
 		//------ connecting ------
 		if args.other.len() == 0{
@@ -220,7 +220,7 @@ fn main() -> Result<(),io::Error>{
 		}else if args.other.len() == 1{
 			//address only
 			address = args.other[0].clone();
-			connection = socket_from_addr(address,port,our_name)?;
+			connection = socket_from_addr(address,port,&our_name)?;
 		}else{
 			//address and port provided
 			address = args.other[0].clone();
@@ -228,7 +228,7 @@ fn main() -> Result<(),io::Error>{
 				Ok(p) => p,
 				Err(e) => {eprintln!("Failed to parse port."); return Err(io::Error::new(ErrorKind::Other,format!("{:?}",e)))},
 			};
-			connection = socket_from_addr(address,port,our_name)?;
+			connection = socket_from_addr(address,port,&our_name)?;
 		}
 	}
 	//====== extract the connection details ======
@@ -256,7 +256,7 @@ fn main() -> Result<(),io::Error>{
 						break Err(e)
 					},
 				};
-				let _ = match io.println(message){
+				let _ = match io.println(format!("({client_name}) {message}")){
 					Ok(()) => io::Result::Ok(()),
 					Err(e) => break Err(e),
 				};
@@ -284,10 +284,12 @@ fn main() -> Result<(),io::Error>{
 		let io = io_controller.clone();
 		sending_thread = thread::spawn(move ||{
 			match loop {//====== mainloop ======
+				//get the message
 				let message = match io.input(">>>"){
 					Ok(m) => m,
 					Err(e) => break Err(e),
 				};
+				//send the mesage
 				match send_msg(&mut socket,&message){
 					Ok(()) => (),
 					Err(e) => {
@@ -296,6 +298,8 @@ fn main() -> Result<(),io::Error>{
 					},
 				};
 				if message == "/exit" {break Ok(());}
+				//echo their message back to them
+				io.println(format!("({our_name}) {message}"));
 				//use bool to signal when to terminate thread
 				let keep_going = match continue_status.lock(){
 					Ok(t) => t,
@@ -309,6 +313,7 @@ fn main() -> Result<(),io::Error>{
 						Ok(t) => t,
 						Err(e) => return Err(io::Error::other(format!("{:?}",e)))
 					};
+					//stop cleanly
 					*keep_going = false;
 					Err(e)
 				},
@@ -376,7 +381,7 @@ fn socket_from_daemon() -> io::Result<Connection>{
 		Err(io::Error::other("Could not find fd in ancillary data"))
 	}
 }
-fn socket_from_addr(address: String, port: u16, our_name: String) -> io::Result<Connection>{
+fn socket_from_addr(address: String, port: u16, our_name: &String) -> io::Result<Connection>{
 	println!("Converting address \"{}\" and port \"{}\"",address,port);
 	let addr_array: [u8; 4];
 	addr_array = match address.split(".")
@@ -396,7 +401,7 @@ fn socket_from_addr(address: String, port: u16, our_name: String) -> io::Result<
 	let name = recv_msg(&mut stream)?;
 	Ok(Connection {stream: stream, name: name, time: Local::now()})
 }
-fn socket_from_listen_addr(address: String, port: u16, our_name: String) -> io::Result<Connection>{
+fn socket_from_listen_addr(address: String, port: u16, our_name: &String) -> io::Result<Connection>{
 	println!("Converting address \"{}\" and port \"{}\"",address,port);
 	let addr_array: [u8; 4];
 	addr_array = match address.split(".")

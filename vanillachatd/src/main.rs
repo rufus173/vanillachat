@@ -9,6 +9,7 @@ extern crate libnotify;
 use std::io::{Write,Read};
 use std::thread;
 use std::os::unix::net::{UnixListener, SocketAncillary};
+use nix::unistd::gethostname;
 use std::net::{TcpListener, TcpStream, SocketAddr};
 
 pub struct Connection {
@@ -22,7 +23,7 @@ const SOCKET_LOCATION: &str = "/tmp/vanillachatd.socket";
 
 fn main() -> io::Result<()>{
 	let mut connections: Vec<Connection> = vec![];
-	let our_name = "da server".to_string();
+	let our_name: String = gethostname()?.into_string().unwrap_or("Unknown name".into());
 	//===== setup the listener ======
 	let port: u16 = 9567;
 	let addr = SocketAddr::from(([0,0,0,0],port));
