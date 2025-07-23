@@ -6,6 +6,8 @@ It has a daemon and a client, with the daemon accepting connections, and notifyi
 
 # Install
 
+The binaries are called vchat and vchatd.
+
 ## Requirements
 
 Due to moving file descriptors over a unix socket, a rust nightly feature is required.
