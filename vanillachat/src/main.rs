@@ -266,7 +266,6 @@ fn main() -> Result<(),io::Error>{
 						Err(e) => break Err(io::Error::other(format!("{:?}",e)))
 					};
 					if *keep_going == false {break Ok(())}
-					let _ = io.println(format!("2: bye"))?;
 				}
 			}{//====== match result from loop ======
 				Ok(()) => Ok(()),

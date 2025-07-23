@@ -139,7 +139,7 @@ fn recv_msg(connection: &mut Connection,timeout: Option<Duration>) -> Option<Str
 fn send_notification(connection: &Connection, message: String) -> Result<(),String>{
 	println!("new message: {message}");
 	libnotify::init("vanillachatd")?;
-	let notification = libnotify::Notification::new(format!("vanillachat @{}",connection.address).as_str(),Some(message.as_str()),None);
+	let notification = libnotify::Notification::new(format!("vanillachat @{}",connection.name).as_str(),Some(message.as_str()),None);
 	match notification.show(){
 		Ok(_) => Ok(()),
 		Err(e) => Err(e.to_string()),
