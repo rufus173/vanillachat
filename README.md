@@ -8,6 +8,9 @@ It has a daemon and a client, with the daemon accepting connections, and notifyi
 
 ## Requirements
 
+Due to moving file descriptors over a unix socket, a rust nightly feature is required.
+You must be using rust nightly for it to compile
+
 `libnotify-dev`
 
 `sudo make install`

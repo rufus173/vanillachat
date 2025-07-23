@@ -8,7 +8,7 @@ use std::io::{Read,Write,ErrorKind};
 use std::thread;
 use std::sync::{Arc,Mutex};
 use std::cell::RefCell;
-use std::net::{TcpStream,TcpListener,SocketAddr};
+use std::net::{TcpStream,TcpListener,SocketAddr,Shutdown};
 use nix::poll::{poll,PollFd,PollFlags};
 use nix::unistd::gethostname;
 use std::os::fd::{AsFd,FromRawFd};
@@ -260,11 +260,14 @@ fn main() -> Result<(),io::Error>{
 					Ok(()) => io::Result::Ok(()),
 					Err(e) => break Err(e),
 				};
-				let keep_going = match continue_status.lock(){
-					Ok(t) => t,
-					Err(e) => break Err(io::Error::other(format!("{:?}",e)))
-				};
-				if *keep_going == false {break Ok(())}
+				{//check if we should continue
+					let keep_going = match continue_status.lock(){
+						Ok(t) => t,
+						Err(e) => break Err(io::Error::other(format!("{:?}",e)))
+					};
+					if *keep_going == false {break Ok(())}
+					let _ = io.println(format!("2: bye"))?;
+				}
 			}{//====== match result from loop ======
 				Ok(()) => Ok(()),
 				Err(e) => {
@@ -289,6 +292,19 @@ fn main() -> Result<(),io::Error>{
 					Ok(m) => m,
 					Err(e) => break Err(e),
 				};
+				//exit
+				if message == "/exit" {
+					let mut keep_going = match continue_status.lock(){
+						Ok(t) => t,
+						Err(e) => return Err(io::Error::other(format!("{:?}",e)))
+					};
+					//stop cleanly
+					*keep_going = false;
+					//kill the socket so we dont hang on recv
+					socket.shutdown(Shutdown::Both);
+					//exit
+					break Ok(());
+				}
 				//send the mesage
 				match send_msg(&mut socket,&message){
 					Ok(()) => (),
@@ -297,15 +313,15 @@ fn main() -> Result<(),io::Error>{
 						break Err(e)
 					},
 				};
-				if message == "/exit" {break Ok(());}
 				//echo their message back to them
 				io.println(format!("({our_name}) {message}"));
-				//use bool to signal when to terminate thread
-				let keep_going = match continue_status.lock(){
-					Ok(t) => t,
-					Err(e) => break Err(io::Error::other(format!("{:?}",e)))
-				};
-				if *keep_going == false {break Ok(())}
+				{//use bool to signal when to terminate thread
+					let keep_going = match continue_status.lock(){
+						Ok(t) => t,
+						Err(e) => break Err(io::Error::other(format!("{:?}",e)))
+					};
+					if *keep_going == false {break Ok(())}
+				}
 			}{//====== match result from loop ======
 				Ok(()) => Ok(()),
 				Err(e) => {
@@ -321,9 +337,8 @@ fn main() -> Result<(),io::Error>{
 		});
 	}
 	//====== join all the threads ======
-	let _ = receiving_thread.join();
-	let _ = sending_thread.join();
-	Ok(())
+	receiving_thread.join().expect("Couldnt join threads with main")?;
+	sending_thread.join().expect("Couldnt join threads with main")
 }
 fn print_help(){
 	let name = env::args().next().unwrap();
