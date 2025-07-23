@@ -1,3 +1,4 @@
+#![feature(unix_socket_ancillary_data)]
 use termios::*;
 use chrono::{DateTime,Local};
 use std::env;
@@ -9,8 +10,9 @@ use std::sync::{Arc,Mutex};
 use std::cell::RefCell;
 use std::net::{TcpStream,TcpListener,SocketAddr};
 use nix::poll::{poll,PollFd,PollFlags};
-use std::os::fd::AsFd;
-use std::os::unix::net::UnixStream;
+use nix::unistd::gethostname;
+use std::os::fd::{AsFd,FromRawFd};
+use std::os::unix::net::{SocketAncillary,UnixStream,AncillaryData};
 
 pub struct ThreadedIO {
 	io_lock: Mutex<()>,
@@ -26,11 +28,18 @@ pub struct Connection {
 	name: String,
 }
 
+pub struct AvailableConnection {
+	time: DateTime<Local>,
+	name: String,
+}
+
 pub struct Args {
 	short: Vec<String>,
 	long: Vec<String>,
 	other: Vec<String>,
 }
+
+const SOCKET_LOCATION: &str = "/tmp/vanillachatd.socket";
 
 impl Args {
 	fn gather() -> Args{
@@ -178,7 +187,8 @@ fn main() -> Result<(),io::Error>{
 	let address: String;
 	//====== process arguments ======
 	let args = Args::gather();
-	let mut socket: TcpStream;
+	let connection: Connection;
+	let our_name: String = gethostname()?.into_string().unwrap_or("Unknown name".into());
 	if args.long.contains(&"help".to_string()) || args.short.contains(&"h".to_string()){
 		print_help();
 		return Ok(());
@@ -196,20 +206,13 @@ fn main() -> Result<(),io::Error>{
 				Err(e) => {eprintln!("Failed to parse port."); return Err(io::Error::new(ErrorKind::Other,format!("{:?}",e)))},
 			};
 		}
-		socket = match socket_from_listen_addr("0.0.0.0".into(),port){
-			Ok(s) => s,
-			Err(e) => {eprintln!("Failed to host: {}",e);return Err(e)},
-		};
+		connection = socket_from_listen_addr("0.0.0.0".into(),port,our_name)?
 	}else{
 		//------ connecting ------
 		if args.other.len() == 0{
 			println!("using daemon's connections...");
 			//get connection from socket
-			socket = match socket_from_daemon(){
-				Ok(s) => s,
-				Err(e) => return Err(e),
-			};
-
+			connection = socket_from_daemon()?;
 		}else if args.other.len() > 2{
 			//too many arguments!!!!
 			print_help();
@@ -217,10 +220,7 @@ fn main() -> Result<(),io::Error>{
 		}else if args.other.len() == 1{
 			//address only
 			address = args.other[0].clone();
-			socket = match socket_from_addr(address,port){
-				Ok(s) => s,
-				Err(e) => {eprintln!("Failed to connect: {}",e);return Err(e)},
-			};
+			connection = socket_from_addr(address,port,our_name)?;
 		}else{
 			//address and port provided
 			address = args.other[0].clone();
@@ -228,13 +228,14 @@ fn main() -> Result<(),io::Error>{
 				Ok(p) => p,
 				Err(e) => {eprintln!("Failed to parse port."); return Err(io::Error::new(ErrorKind::Other,format!("{:?}",e)))},
 			};
-			socket = match socket_from_addr(address,port){
-				Ok(s) => s,
-				Err(e) => {eprintln!("Failed to connect: {}",e);return Err(e)},
-			};
+			connection = socket_from_addr(address,port,our_name)?;
 		}
 	}
+	//====== extract the connection details ======
+	let client_name = connection.name;
+	let mut socket = connection.stream;
 	println!("Connected!");
+	println!("client has set their name to <{}>",client_name);
 	//====== init threads ======
 	let threaded_io_instance = ThreadedIO::new();
 	let receiving_thread: thread::JoinHandle<io::Result<()>>;
@@ -327,37 +328,55 @@ fn print_help(){
 	println!("for hosting:");
 	println!("{} [options] <\"-s\" or \"--server\"> [port]",name);
 }
-fn socket_from_daemon() -> io::Result<TcpStream>{
-	let mut daemon = UnixStream::connect("/tmp/vanillachatd.socket")?;
+fn socket_from_daemon() -> io::Result<Connection>{
+	let mut daemon = UnixStream::connect(SOCKET_LOCATION)?;
 	//====== receive list of available connections ======
-	let mut count_buffer: [u8; 4];
+	let mut count_buffer = [0; 4];
 	daemon.read_exact(&mut count_buffer)?;
 	let connection_count = u32::from_be_bytes(count_buffer);
 	let mut connections = vec![];
-	for i in 0..connection_count{
-		let connection: Connection;
+	for _i in 0..connection_count{
 		//read timestamp of when connection was made
-		let mut timestamp_buffer: [u8; 8];
+		let mut timestamp_buffer = [0; 8];
 		daemon.read_exact(&mut timestamp_buffer)?;
 		let timestamp = u64::from_be_bytes(timestamp_buffer);
-		//if extracting the date fails, fallback to unix epoch
-		connection.time = DateTime::from_timestamp(timestamp as i64,0).unwrap_or(DateTime::UNIX_EPOCH).into();
-		//read the name they provide
-		connection.name = recv_msg(&mut daemon)?;
 		//push the connection
-		connections.push(connection);
+		connections.push(AvailableConnection {
+			//if extracting the date fails, fallback to unix epoch
+			time: DateTime::from_timestamp(timestamp as i64,0).unwrap_or(DateTime::UNIX_EPOCH).into(),
+			//read the name they provide
+			name: recv_msg(&mut daemon)?,
+		});
+
 	}
 	//====== request socket ======
+	let selected_connection = 0;
 	if connection_count == 0{
 		//no socket available
 		Err(io::Error::other("No sockets available"))
 	}else{
 		//request
-		u32::to_be_bytes(0)
-		let request_buffer: [u8; 4];
+		let mut request_buffer: [u8; 4] = u32::to_be_bytes(selected_connection);
+		daemon.write_all(&mut request_buffer)?;
+		let mut buf = [0; 128];
+		let slice_buf = io::IoSliceMut::new(&mut buf);
+		let mut ancillary_buffer = [0; 128];
+		let mut ancillary = SocketAncillary::new(&mut ancillary_buffer);
+		daemon.recv_vectored_with_ancillary(&mut [slice_buf],&mut ancillary)?;
+		//extract fds
+		for ancillary_result in ancillary.messages(){
+			if let AncillaryData::ScmRights(mut rights) = ancillary_result.unwrap(){
+				return Ok(Connection {
+					stream: unsafe {TcpStream::from_raw_fd(rights.next().expect("Couldnt find fd in ancillary data"))},
+					time: connections[0].time,
+					name: connections[0].name.clone(),
+				});
+			}
+		}
+		Err(io::Error::other("Could not find fd in ancillary data"))
 	}
 }
-fn socket_from_addr(address: String, port: u16) -> io::Result<TcpStream>{
+fn socket_from_addr(address: String, port: u16, our_name: String) -> io::Result<Connection>{
 	println!("Converting address \"{}\" and port \"{}\"",address,port);
 	let addr_array: [u8; 4];
 	addr_array = match address.split(".")
@@ -370,9 +389,14 @@ fn socket_from_addr(address: String, port: u16) -> io::Result<TcpStream>{
 	let mut sock_addr: SocketAddr = SocketAddr::from((addr_array,port));
 	sock_addr.set_port(port);
 	println!("Attempting connection using address {}...",sock_addr);
-	TcpStream::connect(sock_addr)
+	let mut stream = TcpStream::connect(sock_addr)?;
+	//send our name
+	send_msg(&mut stream,&our_name)?;
+	//receive their name
+	let name = recv_msg(&mut stream)?;
+	Ok(Connection {stream: stream, name: name, time: Local::now()})
 }
-fn socket_from_listen_addr(address: String, port: u16) -> io::Result<TcpStream>{
+fn socket_from_listen_addr(address: String, port: u16, our_name: String) -> io::Result<Connection>{
 	println!("Converting address \"{}\" and port \"{}\"",address,port);
 	let addr_array: [u8; 4];
 	addr_array = match address.split(".")
@@ -386,10 +410,15 @@ fn socket_from_listen_addr(address: String, port: u16) -> io::Result<TcpStream>{
 	sock_addr.set_port(port);
 	println!("Attempting to host using address {}...",sock_addr);
 	let listener = TcpListener::bind(sock_addr);
-	match listener?.accept(){
+	let mut stream = match listener?.accept(){
 		Ok((sock,_addr)) => Ok(sock),
 		Err(e) => Err(e),
-	}
+	}?;
+	//send our name
+	send_msg(&mut stream,&our_name)?;
+	//receive their name
+	let name = recv_msg(&mut stream)?;
+	Ok(Connection {stream: stream, name: name, time: Local::now()})
 }
 fn recv_msg<T: io::Read>(stream: &mut T) -> io::Result<String>{
 	//switch to nonblocking

@@ -1,14 +1,14 @@
 #![feature(unix_socket_ancillary_data)]
 use std::io;
 use std::os::fd::AsRawFd;
-use chrono::{Local,TimeZone};
+use chrono::{Local};
 use std::path::Path;
 use std::fs;
 use std::time::{Duration,Instant};
 extern crate libnotify;
 use std::io::{Write,Read};
 use std::thread;
-use std::os::unix::net::{UnixStream, UnixListener, SocketAncillary};
+use std::os::unix::net::{UnixListener, SocketAncillary};
 use std::net::{TcpListener, TcpStream, SocketAddr};
 
 pub struct Connection {
@@ -22,6 +22,7 @@ const SOCKET_LOCATION: &str = "/tmp/vanillachatd.socket";
 
 fn main() -> io::Result<()>{
 	let mut connections: Vec<Connection> = vec![];
+	let our_name = "da server".to_string();
 	//===== setup the listener ======
 	let port: u16 = 9567;
 	let addr = SocketAddr::from(([0,0,0,0],port));
@@ -37,7 +38,7 @@ fn main() -> io::Result<()>{
 	loop{
 		//====== accept tcp connections ======
 		let _ = match listener.accept(){
-			Ok(connection) => handle_connection(&mut connections,connection.0,connection.1),
+			Ok(connection) => handle_connection(&mut connections,connection.0,connection.1,&our_name),
 			Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(()),
 			Err(e) => panic!("Error: {e}"),
 		};
@@ -66,7 +67,7 @@ fn main() -> io::Result<()>{
 		thread::sleep(Duration::from_millis(20));
 	}
 }
-fn handle_connection(connections: &mut Vec<Connection>, stream: TcpStream, address: SocketAddr) -> Result<(), io::Error>{
+fn handle_connection(connections: &mut Vec<Connection>, stream: TcpStream, address: SocketAddr, our_name: &String) -> Result<(), io::Error>{
 	println!("New connection: {}",address);
 	let mut connection = Connection {
 		stream: stream,
@@ -74,7 +75,8 @@ fn handle_connection(connections: &mut Vec<Connection>, stream: TcpStream, addre
 		message_buffer: "".to_string(),
 		name: String::new()
 	};
-	
+	//====== send our name ======
+	send_msg(&mut connection.stream,our_name.clone())?;
 	//======= give the client 5s to send their name ======
 	let timeout = Duration::from_secs(5);
 	let name = recv_msg(&mut connection,Some(timeout)).unwrap_or("name unknown".into());
@@ -146,27 +148,31 @@ fn send_notification(connection: &Connection, message: String) -> Result<(),Stri
 }
 fn handle_ipc(listener: &UnixListener, connections: &mut Vec<Connection>) -> io::Result<()>{
 	//====== accept connection ======
-	let (mut connection,addr) = match listener.accept(){
+	let (mut connection, _addr) = match listener.accept(){
 		Ok(c) => c,
 		//yeild if no connection ready
 		Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(()),
 		Err(e) => return Err(e),
 	};
+	println!("new ipc connection");
 	//====== send over client info ======
 	//send the number of connections
 	connection.write_all(&u32::to_be_bytes(connections.len().try_into().unwrap_or(u32::MAX)))?;
 	for i in 0..connections.len(){
 		//send timestamp
 		let timestamp: u64 = Local::now().timestamp().try_into().unwrap_or(0);
+		connection.write_all(&mut u64::to_be_bytes(timestamp))?;
 		//send name
-		send_msg(&mut connection,connections[i].name.clone());
+		send_msg(&mut connection,connections[i].name.clone())?;
 	}
 	//====== let client select socket ======
 	let mut selected_buffer = [0; 4];
 	connection.read_exact(&mut selected_buffer)?;
 	let selected_connection = u32::from_be_bytes(selected_buffer);
 	//====== send the socket ======
-	let socket_fd = connections.swap_remove(selected_connection as usize).stream.as_raw_fd();
+	println!("ipc connection took [{:?}]",connections[selected_connection as usize].address);
+	let socket_stream_binder = connections.swap_remove(selected_connection as usize).stream;
+	let socket_fd = socket_stream_binder.as_raw_fd();
 	let mut ancillary_buffer = [0; 128];
 	let mut ancillary = SocketAncillary::new(&mut ancillary_buffer);
 	ancillary.add_fds(&[socket_fd]);
