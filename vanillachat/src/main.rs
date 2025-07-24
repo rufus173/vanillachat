@@ -346,6 +346,9 @@ fn print_help(){
 	println!("{} [options] to connect through the daemon",name);
 	println!("for hosting:");
 	println!("{} [options] <\"-s\" or \"--server\"> [port]",name);
+	println!("commands:");
+	println!("commands start with '/'");
+	println!("/exit - exits properly and cleans up the terminal settings. if not used, may result in your terminal behaving weirdly.");
 }
 fn socket_from_daemon() -> io::Result<Connection>{
 	let mut daemon = UnixStream::connect(SOCKET_LOCATION)?;
