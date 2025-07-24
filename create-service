@@ -1,0 +1,12 @@
+#!/bin/sh
+cat << EOF > ~/.config/systemd/user/vchatd.service
+[Unit]
+Description=Vanillachat daemon
+
+[Service]
+Name=vchatd
+ExecStart=/usr/bin/vchatd
+
+[Install]
+WantedBy=default.target
+EOF

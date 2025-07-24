@@ -13,6 +13,13 @@ The binaries are called vchat and vchatd.
 Due to moving file descriptors over a unix socket, a rust nightly feature is required.
 You must be using rust nightly for it to compile
 
+## Steps
+
 `libnotify-dev`
 
 `sudo make install`
+
+Optionaly, you can setup a systemd user service for the daemon to run on.
+
+`./create-service`
+`systemctl --user enable --now vchatd.service`
