@@ -148,14 +148,15 @@ impl ThreadedIO {
 					}
 				},
 			}
-			//====== display the prompt closure ======
-			let _io_guard = self.io_lock.lock();
-			let current_prompt_state_binding = self.current_prompt_state.lock().unwrap();
-			let mut current_prompt_state = current_prompt_state_binding.borrow_mut();
-			*current_prompt_state = prompt.to_string() + &input_buffer.iter().collect::<String>();
-			let mut stdout = io::stdout();
-			stdout.write_all(format!("\r\x1b[2K{}",current_prompt_state).as_bytes())?;
-			stdout.flush()?;
+			{//====== display the prompt closure ======
+				let _io_guard = self.io_lock.lock();
+				let current_prompt_state_binding = self.current_prompt_state.lock().unwrap();
+				let mut current_prompt_state = current_prompt_state_binding.borrow_mut();
+				*current_prompt_state = prompt.to_string() + &input_buffer.iter().collect::<String>();
+				let mut stdout = io::stdout();
+				stdout.write_all(format!("\r\x1b[2K{}",current_prompt_state).as_bytes())?;
+				stdout.flush()?;
+			}
 			//====== wait for data ======
 			wait_for_stdin(50)?;
 		}
