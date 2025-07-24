@@ -15,9 +15,11 @@ You must be using rust nightly for it to compile
 
 ## Steps
 
+You may have to perform `sudo rustup default nightly` to set nightly as the default build for root if you are performing `sudo make install` rather than `make all` then `sudo make install`
+
 `libnotify-dev`
 
-`sudo make install`
+`sudo make install` or (`make all` then `sudo make install`)
 
 Optionaly, you can setup a systemd user service for the daemon to run on.
 
