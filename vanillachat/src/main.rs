@@ -206,7 +206,7 @@ fn main() -> Result<(),io::Error>{
 				Err(e) => {eprintln!("Failed to parse port."); return Err(io::Error::new(ErrorKind::Other,format!("{:?}",e)))},
 			};
 		}
-		connection = socket_from_listen_addr("0.0.0.0".into(),port,&our_name)?
+		connection = socket_from_listen_addr(port,&our_name)?
 	}else{
 		//------ connecting ------
 		if args.other.len() == 0{
@@ -300,7 +300,7 @@ fn main() -> Result<(),io::Error>{
 					//stop cleanly
 					*keep_going = false;
 					//kill the socket so we dont hang on recv
-					socket.shutdown(Shutdown::Both);
+					let _ = socket.shutdown(Shutdown::Both);
 					//exit
 					break Ok(());
 				}
@@ -313,7 +313,7 @@ fn main() -> Result<(),io::Error>{
 					},
 				};
 				//echo their message back to them
-				io.println(format!("({our_name}) {message}"));
+				io.println(format!("({our_name}) {message}"))?;
 				{//use bool to signal when to terminate thread
 					let keep_going = match continue_status.lock(){
 						Ok(t) => t,
@@ -396,23 +396,15 @@ fn socket_from_daemon() -> io::Result<Connection>{
 	}
 }
 fn socket_from_addr(address: String, port: u16, our_name: &String) -> io::Result<Connection>{
-	println!("Converting address \"{}\" and port \"{}\"",address,port);
-	let mut sock_addr = (address,0_u16).to_socket_addrs()?.next().ok_or(io::Error::other("No ip address could be found"))?;
-	sock_addr.set_port(port);
-	println!("Attempting connection using address {}...",sock_addr);
-	let mut stream = TcpStream::connect(sock_addr)?;
+	let mut stream = TcpStream::connect((address,port))?;
 	//send our name
 	send_msg(&mut stream,&our_name)?;
 	//receive their name
 	let name = recv_msg(&mut stream)?;
 	Ok(Connection {stream: stream, name: name, time: Local::now()})
 }
-fn socket_from_listen_addr(address: String, port: u16, our_name: &String) -> io::Result<Connection>{
-	println!("Converting address \"{}\" and port \"{}\"",address,port);
-	let mut sock_addr = (address,0_u16).to_socket_addrs()?.next().ok_or(io::Error::other("No ip address could be found"))?;
-	sock_addr.set_port(port);
-	println!("Attempting to host using address {}...",sock_addr);
-	let listener = TcpListener::bind(sock_addr);
+fn socket_from_listen_addr(port: u16, our_name: &String) -> io::Result<Connection>{
+	let listener = TcpListener::bind(("0.0.0.0",port));
 	let mut stream = match listener?.accept(){
 		Ok((sock,_addr)) => Ok(sock),
 		Err(e) => Err(e),
