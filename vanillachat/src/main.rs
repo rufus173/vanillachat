@@ -8,7 +8,7 @@ use std::io::{Read,Write,ErrorKind};
 use std::thread;
 use std::sync::{Arc,Mutex};
 use std::cell::RefCell;
-use std::net::{TcpStream,TcpListener,SocketAddr,Shutdown};
+use std::net::{TcpStream,TcpListener,SocketAddr,Shutdown,ToSocketAddrs};
 use nix::poll::{poll,PollFd,PollFlags};
 use nix::unistd::gethostname;
 use std::os::fd::{AsFd,FromRawFd};
@@ -397,15 +397,7 @@ fn socket_from_daemon() -> io::Result<Connection>{
 }
 fn socket_from_addr(address: String, port: u16, our_name: &String) -> io::Result<Connection>{
 	println!("Converting address \"{}\" and port \"{}\"",address,port);
-	let addr_array: [u8; 4];
-	addr_array = match address.split(".")
-		.map(|x| x.parse::<u8>().unwrap_or(0))
-		.collect::<Vec<u8>>()
-		.try_into(){
-			Ok(a) => a,
-			Err(e) => return Err(io::Error::other(format!("Could not parse address: {:?}",e))),
-	};
-	let mut sock_addr: SocketAddr = SocketAddr::from((addr_array,port));
+	let mut sock_addr = (address,0_u16).to_socket_addrs()?.next().ok_or(io::Error::other("No ip address could be found"))?;
 	sock_addr.set_port(port);
 	println!("Attempting connection using address {}...",sock_addr);
 	let mut stream = TcpStream::connect(sock_addr)?;
@@ -417,15 +409,7 @@ fn socket_from_addr(address: String, port: u16, our_name: &String) -> io::Result
 }
 fn socket_from_listen_addr(address: String, port: u16, our_name: &String) -> io::Result<Connection>{
 	println!("Converting address \"{}\" and port \"{}\"",address,port);
-	let addr_array: [u8; 4];
-	addr_array = match address.split(".")
-		.map(|x| x.parse::<u8>().unwrap_or(0))
-		.collect::<Vec<u8>>()
-		.try_into(){
-			Ok(a) => a,
-			Err(e) => return Err(io::Error::other(format!("Could not parse address: {:?}",e))),
-	};
-	let mut sock_addr: SocketAddr = SocketAddr::from((addr_array,port));
+	let mut sock_addr = (address,0_u16).to_socket_addrs()?.next().ok_or(io::Error::other("No ip address could be found"))?;
 	sock_addr.set_port(port);
 	println!("Attempting to host using address {}...",sock_addr);
 	let listener = TcpListener::bind(sock_addr);
