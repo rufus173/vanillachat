@@ -208,6 +208,30 @@ fn main() -> Result<(),io::Error>{
 			};
 		}
 		connection = socket_from_listen_addr(port,&our_name)?
+	}else if args.short.contains(&"i".to_string()) || args.long.contains(&"interactive".to_string()){
+		//------ interactively get arguments ------
+		connection = socket_from_daemon() //see if there is a connection available
+			.or_else(|_|{
+				println!("No users already connected.");
+				loop {
+					println!("Enter hostname or ip to connect to, or a blank line to exit.");
+					//prompt
+					print!("enter address >>>");
+					io::stdout().flush();
+					//read
+					let mut address = String::new();
+					io::stdin().read_line(&mut address)?;
+					//check if line is empty
+					if address.trim_end() == "" {
+						break Err(io::Error::other("Nothing to connect to"));
+					}
+					//only continue if connection was successfull
+					match socket_from_addr(address.trim().to_string(),port,&our_name){
+						Ok(c) => break Ok(c),
+						Err(e) => eprintln!("Connection error [{e}], Try entering the address again."),
+					}
+				}
+			})?;
 	}else{
 		//------ connecting ------
 		if args.other.len() == 0{
