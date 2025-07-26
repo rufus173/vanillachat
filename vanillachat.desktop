@@ -1,0 +1,8 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Name=vanillachat
+Type=Application
+Comment=Harry's simple chat program
+Exec=/usr/bin/vchat -i
+Icon=vanillachat
+Terminal=true

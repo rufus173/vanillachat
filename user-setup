@@ -10,3 +10,6 @@ ExecStart=/usr/bin/vchatd
 [Install]
 WantedBy=default.target
 EOF
+systemctl --user enable --now vchatd.service
+cp logo.png ~/.local/share/icons/hicolor/32x32/apps/vanillachat.png
+cp vanillachat.desktop ~/.local/share/applications

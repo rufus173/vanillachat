@@ -23,5 +23,5 @@ You may have to perform `sudo rustup default nightly` to set nightly as the defa
 
 Optionaly, you can setup a systemd user service for the daemon to run on.
 
-`./create-service`
+`./user-setup`
 `systemctl --user enable --now vchatd.service`
